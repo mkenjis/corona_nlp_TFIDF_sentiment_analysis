@@ -1,0 +1,316 @@
+
+val df = spark.read.format("csv").option("header","true").option("inferSchema","true").option("quoteAll","true").option("multiLine","true").load("corona_nlp/Corona_NLP_train.csv")
+
+scala> df.printSchema
+root
+ |-- UserName: integer (nullable = true)
+ |-- ScreenName: integer (nullable = true)
+ |-- Location: string (nullable = true)
+ |-- TweetAt: string (nullable = true)
+ |-- OriginalTweet: string (nullable = true)
+ |-- Sentiment: string (nullable = true)
+: string (nullable = true)
+
+
+scala> df.show
++--------+----------+--------------------+----------+--------------------+-------------------+----+
+|UserName|ScreenName|            Location|   TweetAt|       OriginalTweet|          Sentiment|  X
++--------+----------+--------------------+----------+--------------------+-------------------+----+
+|null|799|     48751|              London|16-03-2020|@MeNyrbie @Phil_G...|           Neutral
+|null|800|     48752|                  UK|16-03-2020|advice Talk to yo...|          Positive
+|null|801|     48753|           Vagabonds|16-03-2020|Coronavirus Austr...|          Positive
+|null|802|     48754|                null|16-03-2020|My food stock is ...|          Positive
+|null|803|     48755|                null|16-03-2020|Me, ready to go a...|Extremely Negative
+|null|804|     48756|ÜT: 36.319708,-82...|16-03-2020|As news of the re...|          Positive
+|null|805|     48757|35.926541,-78.753267|16-03-2020|Cashier at grocer...|          Positive
+|null|806|     48758|             Austria|16-03-2020|Was at the superm...|           Neutral
+|null|807|     48759|     Atlanta, GA USA|16-03-2020|Due to COVID-19 o...|          Positive
+|null|808|     48760|    BHAVNAGAR,GUJRAT|16-03-2020|For corona preven...|          Negative
+|null|809|     48761|      Makati, Manila|16-03-2020|All month there h...|           Neutral
+|null|810|     48762|Pitt Meadows, BC,...|16-03-2020|Due to the Covid-...|Extremely Positive
+|null|811|     48763|          Horningsea|16-03-2020|#horningsea is a ...|Extremely Positive
+|null|812|     48764|         Chicago, IL|16-03-2020|Me: I don't need ...|          Positive
+|null|813|     48765|                null|16-03-2020|ADARA Releases CO...|          Positive
+|null|814|     48766|      Houston, Texas|16-03-2020|Lines at the groc...|          Positive
+|null|815|     48767|        Saudi Arabia|16-03-2020|????? ????? ?????...|           Neutral
+|null|816|     48768|     Ontario, Canada|16-03-2020|@eyeonthearctic 1...|           Neutral
+|null|817|     48769|       North America|16-03-2020|Amazon Glitch Sty...|Extremely Positive
+|null|818|     48770|          Denver, CO|16-03-2020|For those who are...|          Positive
++--------+----------+--------------------+----------+--------------------+-------------------+----+
+only showing top 20 rows
+
+
+scala> df.where("OriginalTweet is null").count
+res2: Long = 0
+
+scala> df.where("Sentiment is null").count
+res3: Long = 0
+
+val rdd = df.select("OriginalTweet","Sentiment").rdd
+
+val rdd1 = rdd.map( x => x.toSeq ).map( x => x.toArray )
+
+val rdd2 = rdd1.map( x => Array(x(0).toString, x(1).toString))
+
+rdd2.map( x => x(1)).distinct.foreach(println)
+[Stage 7:>                                                          (0 + 1) / 1]
+Extremely Negative
+Negative
+Extremely Positive
+Neutral
+Positive
+
+val categories = rdd2.map(x => x(1)).distinct.zipWithIndex.collect.toMap
+
+-- remove nonword characters (such as punctuation).
+val nonWordSplit = rdd2.flatMap(x => x(0).split("""\W+""").map(_.toLowerCase))
+nonWordSplit.sample(true, 0.3, 42).take(100).mkString(",")
+nonWordSplit.distinct.count  // 78989
+
+-- filter out numbers and tokens that are words mixed with numbers
+val regex = """[^0-9]*""".r
+val filterNumbers = nonWordSplit.filter(token => regex.pattern.matcher(token).matches)
+filterNumbers.distinct.sample(false, 0.3, 42).take(100).mkString("\n")
+filterNumbers.distinct.count  // 55181
+
+-- list highest occurrence of words to get an idea which stop words to be removed
+val tokenCounts = filterNumbers.map(t => (t, 1)).reduceByKey(_ + _)
+val orderingDesc = Ordering.by[(String, Int), Int](_._2)
+tokenCounts.top(20)(orderingDesc).mkString("\n")
+
+-- remove stop words
+val stopwords = Set(
+ "","the","a","an","of","or","in","for","by","on","but", "is", "not", "with", "as", "was", "if",
+ "they", "are", "this", "and", "it", "have", "from", "at", "my", "be", "that", "to"
+)
+val tokenCountsFilteredStopwords = tokenCounts.filter { case(k, v) => !stopwords.contains(k) }
+tokenCountsFilteredStopwords.top(20)(orderingDesc).mkString("\n")
+
+-- remove tokens with one-character length
+val tokenCountsFilteredSize = tokenCountsFilteredStopwords.filter { case (k, v) => k.size >= 2 }
+tokenCountsFilteredSize.top(20)(orderingDesc).mkString("\n")
+
+-- list terms with only one-occurrence
+val orderingAsc = Ordering.by[(String, Int), Int](-_._2)
+tokenCountsFilteredSize.top(20)(orderingAsc).mkString("\n")
+
+-- remove terms with only one-occurrence
+val rareTokens = tokenCounts.filter{ case (k, v) => v < 2 }.map{ case (k, v) => k }.collect.toSet
+val tokenCountsFilteredAll = tokenCountsFilteredSize.filter { case (k, v) => !rareTokens.contains(k) }
+tokenCountsFilteredAll.top(20)(orderingAsc).mkString("\n")
+
+tokenCountsFilteredAll.count
+res24: Long = 21918
+
+def tokenize(line: String): Seq[String] = {
+ line.split("""\W+""")
+ .map(_.toLowerCase)
+ .filter(token => regex.pattern.matcher(token).matches)
+ .filterNot(token => stopwords.contains(token))
+ .filterNot(token => rareTokens.contains(token))
+ .filter(token => token.size >= 2)
+ .toSeq
+}
+
+rdd2.flatMap(x => tokenize(x(0))).distinct.count
+res27: Long = 21918
+
+val trainSet = rdd2
+
+val tokens = trainSet.map(x => tokenize(x(0)))
+tokens.first.take(20)
+
+---------------------------------------
+
+scala> val df1 = spark.read.format("csv").option("header","true").option("inferSchema","true").option("quoteAll","true").option("multiLine","true").load("corona_nlp/Corona_NLP_test.csv")
+
+scala> df1.printSchema
+root
+ |-- UserName: string (nullable = true)
+ |-- ScreenName: string (nullable = true)
+ |-- Location: string (nullable = true)
+ |-- TweetAt: string (nullable = true)
+ |-- OriginalTweet: string (nullable = true)
+ |-- Sentiment: string (nullable = true)
+: string (nullable = true)
+
+scala> df1.show
++--------+----------+--------------------+----------+--------------------+-------------------+----+
+|UserName|ScreenName|            Location|   TweetAt|       OriginalTweet|          Sentiment|  X
++--------+----------+--------------------+----------+--------------------+-------------------+----+
+|null|  1|     44953|                 NYC|02-03-2020|TRENDING: New Yor...|Extremely Negative
+|null|  2|     44954|         Seattle, WA|02-03-2020|When I couldn't f...|          Positive
+|null|  3|     44955|                null|02-03-2020|Find out how you ...|Extremely Positive
+|null|  4|     44956|         Chicagoland|02-03-2020|#Panic buying hit...|          Negative
+|null|  5|     44957| Melbourne, Victoria|03-03-2020|#toiletpaper #dun...|           Neutral
+|null|  6|     44958|         Los Angeles|03-03-2020|Do you remember t...|           Neutral
+|null|  7|     44959|                null|03-03-2020|Voting in the age...|          Positive
+|null|  8|     44960| Geneva, Switzerland|03-03-2020|@DrTedros We can�...|           Neutral
+|null|  9|     44961|                null|04-03-2020|HI TWITTER! I am ...|Extremely Negative
+|null| 10|     44962|     Dublin, Ireland|04-03-2020|Anyone been in a ...|Extremely Positive
+|null| 11|     44963|Boksburg, South A...|04-03-2020|Best quality couc...|          Positive
+|null| 12|     44964|           New Delhi|04-03-2020|Beware of counter...|Extremely Negative
+|null| 13|     44965|             USA, PA|04-03-2020|Panic food buying...|Extremely Negative
+|null| 14|     44966|                null|04-03-2020|#Covid_19 Went to...|Extremely Positive
+|null| 15|     44967|      Washington, DC|04-03-2020|While we were bus...|          Positive
+|      16|     44968|          Bengaluru |04-03-2020|#AirSewa
+
+|null|Extremely Negative
+|null| 17|     44969|              Mumbai|05-03-2020|What Precautionar...|Extremely Positive
+|null| 18|     44970|    Toronto, Ontario|05-03-2020|When you�re stock...|           Neutral
+|null| 19|     44971|                null|05-03-2020|That's about a we...|          Positive
+|null| 20|     44972|         Tallahassee|05-03-2020|Studies show the ...|Extremely Positive
++--------+----------+--------------------+----------+--------------------+-------------------+----+
+only showing top 20 rows
+
+
+scala> df1.where("OriginalTweet is null").count
+res8: Long = 0
+
+scala> df1.where("Sentiment is null").count
+res9: Long = 0
+
+val rdd3 = df1.select("OriginalTweet","Sentiment").rdd
+
+val rdd4 = rdd3.map( x => Array(x(0).toString, x(1).toString))
+
+rdd4.flatMap(x => tokenize(x(0))).distinct.count
+res54: Long = 10779
+
+val testSet = rdd4
+
+---------------------------------------
+
+import org.apache.spark.mllib.linalg.{ SparseVector => SV }
+import org.apache.spark.mllib.feature.HashingTF
+import org.apache.spark.mllib.feature.IDF
+
+val dim = math.pow(2, 15).toInt
+val hashingTF = new HashingTF(dim)
+
+-- transform function of HashingTF maps each input document (that is, a sequence of tokens) to an MLlib Vector.
+val tf = hashingTF.transform(tokens)
+tf.cache
+
+val v = tf.first.asInstanceOf[SV]
+v.size
+v.values.size
+println(v.values.take(10).toSeq)
+println(v.indices.take(10).toSeq)
+
+-- compute the inverse document frequency for each term in the corpus
+-- by creating a new IDF instance and calling fit with our RDD of term frequency
+-- vectors as the input. We will then transform our term frequency vectors to TF-IDF
+-- vectors through the transform function of IDF:
+
+val idf = new IDF().fit(tf)
+val tfidf = idf.transform(tf)
+val v2 = tfidf.first.asInstanceOf[SV]
+println(v2.values.size)
+println(v2.values.take(10).toSeq)
+println(v2.indices.take(10).toSeq)
+
+---------------------
+
+import org.apache.spark.mllib.regression.LabeledPoint
+
+val zippedTrain = trainSet.zip(tfidf)
+val train = zippedTrain.map{ case(text,vector) => LabeledPoint(categories(text(1)),vector) }
+train.cache
+
+val testTf = testSet.map(x => hashingTF.transform(tokenize(x(0))))
+val testTfIdf = idf.transform(testTf)
+
+val zippedTest = testSet.zip(testTfIdf)
+val test = zippedTest.map{ case(text,vector) => LabeledPoint(categories(text(1)).toDouble,vector) }
+test.cache
+
+---- Multiclass logistic regression --------------
+
+import org.apache.spark.mllib.classification.{LogisticRegressionModel, LogisticRegressionWithLBFGS}
+val numIterations = 100
+val model = new LogisticRegressionWithLBFGS().setNumClasses(5).run(train)
+
+val validPredicts =  test.map(p => (model.predict(p.features),p.label))
+
+validPredicts.take(20)
+res14: Array[(Double, Double)] = Array((3.0,0.0), (4.0,4.0), (2.0,2.0), (1.0,1.0), (4.0,3.0), (3.0,3.0), (2.0,4.0), (2.0,3.0), (0.0,0.0), (4.0,2.0), (3.0,4.0), (3.0,0.0), (0.0,0.0), (4.0,2.0), (3.0,4.0), (4.0,0.0), (4.0,2.0), (3.0,3.0), (4.0,4.0), (2.0,2.0))
+
+import org.apache.spark.mllib.evaluation.MulticlassMetrics
+val metrics = new MulticlassMetrics(validPredicts)
+validPredicts.filter(x => x._1 == x._2).count  // 1614
+validPredicts.count                            // 3798
+val accuracy = metrics.accuracy   // 0.42496050552922593
+
+scala> metrics.confusionMatrix
+res62: org.apache.spark.mllib.linalg.Matrix =
+222.0  252.0  13.0   50.0   55.0
+165.0  455.0  56.0   138.0  227.0
+5.0    66.0   268.0  23.0   237.0
+24.0   156.0  40.0   271.0  128.0
+44.0   222.0  161.0  122.0  398.0
+
+---- MLlib Naive Bayes regression --------------
+
+import org.apache.spark.mllib.classification.NaiveBayes
+val model = NaiveBayes.train(train)
+
+val validPredicts =  test.map(p => (model.predict(p.features),p.label))
+
+validPredicts.take(20)
+res63: Array[(Double, Double)] = Array((0.0,0.0), (4.0,4.0), (2.0,2.0), (1.0,1.0), (3.0,3.0), (3.0,3.0), (2.0,4.0), (2.0,3.0), (4.0,0.0), (3.0,2.0), (3.0,4.0), (1.0,0.0), (1.0,0.0), (2.0,2.0), (0.0,4.0), (1.0,0.0), (4.0,2.0), (0.0,3.0), (4.0,4.0), (2.0,2.0))
+
+import org.apache.spark.mllib.evaluation.MulticlassMetrics
+val metrics = new MulticlassMetrics(validPredicts)
+validPredicts.filter(x => x._1 == x._2).count  // 1559
+validPredicts.count                            // 3798
+val accuracy = metrics.accuracy   // 0.41047919957872564
+
+scala> metrics.confusionMatrix
+res66: org.apache.spark.mllib.linalg.Matrix =
+298.0  201.0  15.0   21.0   57.0
+249.0  400.0  78.0   121.0  193.0
+38.0   49.0   292.0  39.0   181.0
+64.0   116.0  61.0   281.0  97.0
+119.0  213.0  204.0  123.0  288.0
+
+
+---- MLlib Kmeans --------------
+
+val vect = train.map{ case LabeledPoint(x,y) => y }
+
+import org.apache.spark.mllib.clustering.KMeans
+val numClusters = 5
+val numIterations = 10
+val numRuns = 3
+
+val clsmodel = KMeans.train(vect, numClusters,numIterations, numRuns)
+
+val predictions = clsmodel.predict(vect);
+
+predictions.take(20)
+res25: Array[Int] = Array(0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+val validPredicts = predictions.map( x => x.toDouble ).zip(train.map{ case LabeledPoint(x,y) => x })
+
+validPredicts.map( x => (x,1)).reduceByKey(_+_).count
+res27: Long = 19
+
+validPredicts.map( x => (x,1)).reduceByKey(_+_).take(30)
+res24: Array[((Double, Double), Int)] = Array(((1.0,4.0),968), ((0.0,0.0),5304), ((1.0,1.0),303), ((1.0,0.0),133), ((2.0,2.0),19), ((4.0,0.0),4), ((2.0,3.0),44), ((4.0,1.0),1), ((2.0,4.0),55), ((0.0,1.0),9565), ((1.0,2.0),937), ((3.0,4.0),1), ((4.0,3.0),4), ((2.0,1.0),48), ((0.0,3.0),7456), ((0.0,4.0),10398), ((1.0,3.0),209), ((0.0,2.0),5668), ((2.0,0.0),40))
+
+
+      0     1     2     3     4
+0  5304  9565  5668  7456 10398
+1   133   303   937   209   968
+2    40    48    19    44    55
+3                             1
+4     4     1     4
+
+
+categories.foreach(println)
+,1)gative
+,3)utral
+,2)tremely Positive
+,4)sitive
+,0)tremely Negative
