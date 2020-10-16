@@ -1,5 +1,7 @@
 # corona_nlp_TFIDF_sentiment_analysis
 corona nlp TFIDF sentiment analysis using MLlib
+- Source : Kaggle Dataset
+- URL : https://www.kaggle.com/datatattle/covid-19-nlp-text-classification
 
 # Purpose: 
 - use TF-IDF data processing and feature extraction for relevant words

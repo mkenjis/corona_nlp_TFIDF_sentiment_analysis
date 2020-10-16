@@ -274,7 +274,6 @@ res66: org.apache.spark.mllib.linalg.Matrix =
 64.0   116.0  61.0   281.0  97.0
 119.0  213.0  204.0  123.0  288.0
 
-
 ---- MLlib Kmeans --------------
 
 val vect = train.map{ case LabeledPoint(x,y) => y }
