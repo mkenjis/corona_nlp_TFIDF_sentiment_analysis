@@ -1,3 +1,4 @@
+---- Feature extraction & Data Munging --------------
 
 val df = spark.read.format("csv").option("header","true").option("inferSchema","true").option("quoteAll","true").option("multiLine","true").load("corona_nlp/Corona_NLP_train.csv")
 
@@ -225,7 +226,7 @@ val zippedTest = testSet.zip(testTfIdf)
 val test = zippedTest.map{ case(text,vector) => LabeledPoint(categories(text(1)).toDouble,vector) }
 test.cache
 
----- Multiclass logistic regression --------------
+---- MLlib Multiclass logistic regression --------------
 
 import org.apache.spark.mllib.classification.{LogisticRegressionModel, LogisticRegressionWithLBFGS}
 val numIterations = 100
@@ -274,7 +275,7 @@ res66: org.apache.spark.mllib.linalg.Matrix =
 64.0   116.0  61.0   281.0  97.0
 119.0  213.0  204.0  123.0  288.0
 
----- MLlib Kmeans --------------
+---- MLlib Kmeans clustering --------------
 
 val vect = train.map{ case LabeledPoint(x,y) => y }
 
